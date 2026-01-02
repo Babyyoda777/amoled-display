@@ -11,6 +11,8 @@
 #include <linux/regulator/consumer.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/version.h>
+#include <linux/slab.h>
 
 #include <drm/display/drm_dsc.h>
 #include <drm/drm_mipi_dsi.h>
@@ -26,11 +28,53 @@ struct visionox_vtdr6110 {
 	struct regulator_bulk_data *supplies;
 };
 
+/* Supplies description (const data lives in .rodata) */
 static const struct regulator_bulk_data visionox_vtdr6110_supplies[] = {
 	{ .supply = "vddio" },
 	{ .supply = "vci" },
 	{ .supply = "vdd" },
 };
+
+/* -------------------------------------------------------------------------- */
+/* Compatibility shims for older kernels (e.g., 6.6.x) that lack “_multi” APIs */
+/* -------------------------------------------------------------------------- */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 10, 0)
+struct mipi_dsi_multi_context {
+	struct mipi_dsi_device *dsi;
+	int accum_err;
+};
+
+#define mipi_dsi_dcs_write_seq_multi(_ctx, seq...)					\
+	do {										\
+		if (!(_ctx)->accum_err) {						\
+			const u8 __data[] = { seq };					\
+			int __ret = mipi_dsi_dcs_write_buffer((_ctx)->dsi, __data,	\
+							      ARRAY_SIZE(__data));	\
+			if (__ret < 0)							\
+				(_ctx)->accum_err = __ret;				\
+		}									\
+	} while (0)
+
+#define __MIPI_DSI_CALL_MULTI(_ctx, _fn, ...)						\
+	do {										\
+		if (!(_ctx)->accum_err) {						\
+			int __ret = _fn((_ctx)->dsi, ##__VA_ARGS__);			\
+			if (__ret < 0)							\
+				(_ctx)->accum_err = __ret;				\
+		}									\
+	} while (0)
+
+#define mipi_dsi_dcs_exit_sleep_mode_multi(_ctx)	__MIPI_DSI_CALL_MULTI(_ctx, mipi_dsi_dcs_exit_sleep_mode)
+#define mipi_dsi_dcs_enter_sleep_mode_multi(_ctx)	__MIPI_DSI_CALL_MULTI(_ctx, mipi_dsi_dcs_enter_sleep_mode)
+#define mipi_dsi_dcs_set_display_on_multi(_ctx)		__MIPI_DSI_CALL_MULTI(_ctx, mipi_dsi_dcs_set_display_on)
+#define mipi_dsi_dcs_set_display_off_multi(_ctx)	__MIPI_DSI_CALL_MULTI(_ctx, mipi_dsi_dcs_set_display_off)
+
+#define mipi_dsi_msleep(_ctx, msec)							\
+	do {										\
+		if (!(_ctx)->accum_err)							\
+			msleep(msec);							\
+	} while (0)
+#endif /* < 6.10 */
 
 static inline struct visionox_vtdr6110 *to_visionox_vtdr6110(struct drm_panel *panel)
 {
@@ -83,11 +127,6 @@ static int visionox_vtdr6110_on(struct visionox_vtdr6110 *ctx)
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xC4, 0x00);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xCF, 0x03, 0x28, 0x00, 0x11);
 
-	//mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xF0, 0xAA, 0x11);
-	//mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xC2, 0x10, 0x00, 0x60, 0x02, 0x01, 0x11, 0x22, 0x33, 0x43, 0x53);
-	//mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xC3, 0x00, 0x00, 0x00, 0x2A, 0x00, 0xAA, 0x01, 0xFF, 0x02, 0xFF, 0x03, 0xFF);
-	//mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xC4, 0x06, 0x20, 0x05, 0xF6, 0x05, 0x5A, 0x03, 0x87, 0x01, 0xE8, 0x00, 0x0A, 0x00, 0x0A, 0x00, 0x0A, 0x00, 0x0A, 0x80, 0x40, 0x80, 0x40);
-
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xF0, 0xAA, 0x11);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xC2, 0x10, 0x00, 0x60, 0x02, 0x01, 0x11, 0x21, 0x31, 0x41, 0x51);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xC3, 0x00, 0x00, 0x00, 0x2A, 0x00, 0xAA, 0x01, 0xFF, 0x02, 0xFF, 0x03, 0xFF);
@@ -108,7 +147,6 @@ static int visionox_vtdr6110_on(struct visionox_vtdr6110 *ctx)
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xBA, 0x01, 0xD3, 0x01, 0xE4, 0x02, 0x06, 0x02, 0x26, 0x02, 0x42, 0x02, 0x7A, 0x02, 0xAE, 0x02, 0xE5);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xBB, 0x03, 0x19);
 
-	//mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xC0, 0x10, 0x11, 0x22, 0x22, 0x22, 0x22, 0x33, 0x33, 0x43, 0x44, 0x55, 0x55);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xD2, 0x14, 0x92, 0x24);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xC3, 0x00, 0x23, 0x61, 0x45, 0x21, 0x43, 0x65);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xD4, 0x00, 0xFF);
@@ -156,10 +194,6 @@ static int visionox_vtdr6110_on(struct visionox_vtdr6110 *ctx)
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xb4, 0x67, 0x67, 0x67, 0x67, 0x67, 0x67, 0x3f);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xb5, 0x23, 0x61, 0x45, 0x12, 0x53, 0x64);
 	mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0xe5, 0x11);
-
-
-	// mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0x11);
-	// mipi_dsi_dcs_write_seq_multi(&dsi_ctx,  0x29);
 
 	mipi_dsi_dcs_exit_sleep_mode_multi(&dsi_ctx);
 	mipi_dsi_msleep(&dsi_ctx, 60);
@@ -233,7 +267,9 @@ static int visionox_vtdr6110_unprepare(struct drm_panel *panel)
 #define _AMOLED_VBP 33
 
 static const struct drm_display_mode visionox_vtdr6110_mode = {
-	.clock = (_AMOLED_HDISPLAY + _AMOLED_HFP + _AMOLED_HSYNC + _AMOLED_HBP) * (_AMOLED_VDISPLAY + _AMOLED_VFP + _AMOLED_VSYNC + _AMOLED_VBP) * _AMOLED_REFRESH_RATE / 1000,
+	.clock = (_AMOLED_HDISPLAY + _AMOLED_HFP + _AMOLED_HSYNC + _AMOLED_HBP) *
+		 (_AMOLED_VDISPLAY + _AMOLED_VFP + _AMOLED_VSYNC + _AMOLED_VBP) *
+		 _AMOLED_REFRESH_RATE / 1000,
 	.hdisplay = _AMOLED_HDISPLAY,
 	.hsync_start = _AMOLED_HDISPLAY + _AMOLED_HFP,
 	.hsync_end = _AMOLED_HDISPLAY + _AMOLED_HFP + _AMOLED_HSYNC,
@@ -245,31 +281,6 @@ static const struct drm_display_mode visionox_vtdr6110_mode = {
 	.width_mm = 65,
 	.height_mm = 75,
 };
-
-// #define _AMOLED90_REFRESH_RATE 90
-// #define _AMOLED90_HDISPLAY 1080
-// #define _AMOLED90_HFP 8
-// #define _AMOLED90_HSYNC 32
-// #define _AMOLED90_HBP 40
-
-// #define _AMOLED90_VDISPLAY 1240
-// #define _AMOLED90_VFP 40
-// #define _AMOLED90_VSYNC 8
-// #define _AMOLED90_VBP 6
-
-// static const struct drm_display_mode visionox_vtdr6110_mode_90 = {
-// 	.clock = (_AMOLED90_HDISPLAY + _AMOLED90_HFP + _AMOLED90_HSYNC + _AMOLED90_HBP) * (_AMOLED90_VDISPLAY + _AMOLED90_VFP + _AMOLED90_VSYNC + _AMOLED90_VBP) * _AMOLED90_REFRESH_RATE / 1000,
-// 	.hdisplay = _AMOLED90_HDISPLAY,
-// 	.hsync_start = _AMOLED90_HDISPLAY + _AMOLED90_HFP,
-// 	.hsync_end = _AMOLED90_HDISPLAY + _AMOLED90_HFP + _AMOLED90_HSYNC,
-// 	.htotal = _AMOLED90_HDISPLAY + _AMOLED90_HFP + _AMOLED90_HSYNC + _AMOLED90_HBP,
-// 	.vdisplay = _AMOLED90_VDISPLAY,
-// 	.vsync_start = _AMOLED90_VDISPLAY + _AMOLED90_VFP,
-// 	.vsync_end = _AMOLED90_VDISPLAY + _AMOLED90_VFP + _AMOLED90_VSYNC,
-// 	.vtotal = _AMOLED90_VDISPLAY + _AMOLED90_VFP + _AMOLED90_VSYNC + _AMOLED90_VBP,
-// 	.width_mm = 65,
-// 	.height_mm = 75,
-// };
 
 static int visionox_vtdr6110_get_modes(struct drm_panel *panel,
 				       struct drm_connector *connector)
@@ -299,8 +310,15 @@ static int visionox_vtdr6110_bl_update_status(struct backlight_device *bl)
 {
 	struct mipi_dsi_device *dsi = bl_get_data(bl);
 	u16 brightness = backlight_get_brightness(bl);
+	int ret;
 
-	return mipi_dsi_dcs_set_display_brightness_large(dsi, brightness);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+	ret = mipi_dsi_dcs_set_display_brightness_large(dsi, brightness);
+#else
+	ret = mipi_dsi_dcs_set_display_brightness(dsi, brightness);
+#endif
+
+	return ret;
 }
 
 static const struct backlight_ops visionox_vtdr6110_bl_ops = {
@@ -327,21 +345,26 @@ static int visionox_vtdr6110_probe(struct mipi_dsi_device *dsi)
 	struct visionox_vtdr6110 *ctx;
 	int ret;
 
-	// New Linux Kernel Allocation
-	// ctx = devm_drm_panel_alloc(dev, struct visionox_vtdr6110, panel,
-	// 			   &visionox_vtdr6110_panel_funcs,
-	// 			   DRM_MODE_CONNECTOR_DSI);
-	// if (IS_ERR(ctx))
-	// 	return PTR_ERR(ctx);
-
 	ctx = devm_kzalloc(dev, sizeof(*ctx), GFP_KERNEL);
 	if (!ctx)
 		return -ENOMEM;
 
-	ret = devm_regulator_bulk_get_const(&dsi->dev,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+	ret = devm_regulator_bulk_get_const(dev,
 					    ARRAY_SIZE(visionox_vtdr6110_supplies),
 					    visionox_vtdr6110_supplies,
 					    &ctx->supplies);
+#else
+	ctx->supplies = devm_kmemdup(dev, visionox_vtdr6110_supplies,
+				     sizeof(visionox_vtdr6110_supplies),
+				     GFP_KERNEL);
+	if (!ctx->supplies)
+		return -ENOMEM;
+
+	ret = devm_regulator_bulk_get(dev,
+				      ARRAY_SIZE(visionox_vtdr6110_supplies),
+				      ctx->supplies);
+#endif
 	if (ret < 0)
 		return ret;
 
@@ -358,7 +381,8 @@ static int visionox_vtdr6110_probe(struct mipi_dsi_device *dsi)
 
 	dsi->lanes = 4;
 	dsi->format = MIPI_DSI_FMT_RGB888;
-	dsi->mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_NO_EOT_PACKET |
+	dsi->mode_flags = MIPI_DSI_MODE_VIDEO |
+			  MIPI_DSI_MODE_NO_EOT_PACKET |
 			  MIPI_DSI_CLOCK_NON_CONTINUOUS;
 	ctx->panel.prepare_prev_first = true;
 
